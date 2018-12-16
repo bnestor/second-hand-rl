@@ -19,7 +19,7 @@ class Critic(Agent):
         """ Assemble Critic network to predict value of each state
         """
         x = Dense(128, activation='relu')(network.output)
-        out = Dense(1, activation='linear')(x)
+        out = Dense(1, activation='relu')(x)
         return Model(network.input, out)
 
     def optimizer(self):

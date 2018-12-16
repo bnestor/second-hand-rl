@@ -14,6 +14,8 @@ from A3C.a3c import A3C
 from DDQN.ddqn import DDQN
 from DDPG.ddpg import DDPG
 
+from single_cell_env import opticalTweezers
+
 from keras.backend.tensorflow_backend import set_session
 from keras.utils import to_categorical
 
@@ -75,13 +77,23 @@ def main(args=None):
         action_space = gym.make(args.env).action_space
         action_dim = action_space.high.shape[0]
         act_range = action_space.high
-    else:
-        # Standard Environments
-        env = Environment(gym.make(args.env), args.consecutive_frames)
-        env.reset()
-        state_dim = env.get_state_size()
-        action_dim = gym.make(args.env).action_space.n
 
+    else:
+        if args.env=='cell':
+            #do this
+            env=Environment(opticalTweezers(), args.consecutive_frames)
+            # env=opticalTweezers(consecutive_frames=args.consecutive_frames)
+            env.reset()
+            state_dim=(6,)
+            action_dim=4 #note that I have to change the reshape code for a 2d agent # should be 4
+        else:
+            # Standard Environments
+            env = Environment(gym.make(args.env), args.consecutive_frames)
+            env.reset()
+            state_dim = env.get_state_size()
+            print(state_dim)
+            action_dim = gym.make(args.env).action_space.n
+            print(action_dim)
     # Pick algorithm to train
     if(args.type=="DDQN"):
         algo = DDQN(action_dim, state_dim, args)
@@ -102,6 +114,7 @@ def main(args=None):
 
     # Display agent
     old_state, time = env.reset(), 0
+    # all_old_states=[old_state for i in range(args.consecutive_frames)]
     while True:
         env.render()
         a = algo.policy_action(old_state)

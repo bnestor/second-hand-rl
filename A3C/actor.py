@@ -22,7 +22,7 @@ class Actor(Agent):
         """ Assemble Actor network to predict probability of each action
         """
         x = Dense(128, activation='relu')(network.output)
-        out = Dense(self.out_dim, activation='softmax')(x)
+        out = Dense(self.out_dim, activation='linear')(x)
         return Model(network.input, out)
 
     def optimizer(self):

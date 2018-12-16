@@ -34,7 +34,7 @@ def training_thread(agent, Nmax, env, action_dim, f, summary_writer, tqdm, facto
             time += 1
             # Asynchronous training
             if(time%f==0 or done):
-                agent.train_models(states, actions, rewards, done)
+                agent.train_models(states, np.asarray(actions), rewards, done)
                 actions, states, rewards = [], [], []
 
         # Export results for Tensorboard
