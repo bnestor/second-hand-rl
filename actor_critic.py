@@ -99,9 +99,14 @@ class Network2():
 		a1=tf.layers.dense(inputs=states_in, units=64, activation=tf.nn.relu)
 		self.a2=tf.layers.dense(inputs=a1, units=128, activation=tf.nn.relu)
 		a3=tf.layers.dense(inputs=self.a2, units=128, activation=tf.nn.relu)
-		self.out=tf.layers.dense(inputs=a3, units=2, activation=tf.nn.sigmoid)
+		self.out=tf.layers.dense(inputs=a3, units=2, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=0.1))
 		#calculate the loss function
-		self.loss=tf.reduce_mean(tf.scalar_mul(self.scale_factor, tf.reduce_mean(tf.square(tf.subtract(self.out, self.other_pred)))))
+		loss=tf.scalar_mul(self.scale_factor, tf.reduce_mean(tf.square(tf.subtract(self.out, self.other_pred))))
+		l2_loss=tf.losses.get_regularization_loss()
+		# range_loss=tf.reduce_mean(tf.maximum(tf.minimum(tf.subtract(self.out, tf.constant([1, 1], dtype=tf.float32)), tf.constant([0,0], dtype=tf.float32)), tf.constant([1,1], dtype=tf.float32)))
+		one_loss=tf.reduce_mean(tf.to_float(tf.greater_equal(self.out, tf.constant([1, 1], dtype=tf.float32))))
+		zero_loss=tf.reduce_mean(tf.to_float(tf.less_equal(self.out, tf.constant([0, 0], dtype=tf.float32))))
+		self.loss=tf.reduce_mean(loss+l2_loss+10*one_loss+10*zero_loss)
 		optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
 		self.train_op = optimizer.minimize(loss=self.loss,global_step=tf.train.get_global_step())
 	def train(self):
@@ -122,7 +127,7 @@ class Critic():
 	def build_model(self):
 		#buld a 4 layer fc net for actor
 		c3=tf.layers.dense(inputs=self.Actor.a2, units=128, activation=tf.nn.relu)
-		self.c_out=tf.layers.dense(inputs=c3, units=1, activation=tf.nn.sigmoid)
+		self.c_out=tf.layers.dense(inputs=c3, units=1, activation=tf.nn.relu)
 
 		# self.critic_loss=tf.reduce_mean(self.c_out, self.rewards)
 		self.critic_loss=tf.losses.mean_squared_error(self.rewards, self.c_out)
@@ -254,6 +259,8 @@ def train_model(env, actor, critic, States, Actions, Rewards, Advantages, k=5000
 
 def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=10000):
 	""" Main A2C Training Algorithm
+	todo: add more intuitive sampling method.
+	todo:train agent to approximate
 	"""
 	# self.pretrain_random(env, args, summary_writer)
 	results = []
@@ -283,7 +290,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 		data=[]
 		for i in tqdm(range(10000), desc='pretrain'):
 			state=np.random.randint(0, 512, 2).reshape(-1,2)
-			loss, _=sess.run([approx_net.loss, approx_net.train_op], feed_dict={States:state, other:state/512, scale_factor:np.asarray(1)})
+			loss, _=sess.run([approx_net.loss, approx_net.train_op], feed_dict={States:state, other:(state/512), scale_factor:np.asarray(1)})
 			data.append([str(i),str(loss)])
 
 		with open("output.csv", "w") as f:
@@ -321,11 +328,14 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 			loss, _ =sess.run([certainty_net.loss, certainty_net.train_op], feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:pred.reshape((-1,2)), scale_factor:np.asarray(1)})
 
 			state_estimate=sess.run(approx_net.out, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2))})
-			state_estimate=np.squeeze(state_estimate)*512
+			state_estimate=np.squeeze(state_estimate)
+			state_estimate[np.where(state_estimate>1)]=1
+			state_estimate=(state_estimate)*512
+			print(state_estimate)
 
 
-			bias_x=np.random.randint(-512/2, 512/2)
-			bias_y=np.random.randint(-512/2, 512/2)
+			bias_x=0
+			bias_y=0
 			while not done:
 				state_orig=old_state[-1]
 				state=state_orig
@@ -333,19 +343,19 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 				state[2]=state_estimate[0]+bias_x
 				state[3]=state_estimate[1]+bias_y
 
-				if np.random.rand()<0.01:
-					while True:
-						bias_x=np.random.normal(0, loss/20+5)
-						state[2]=state_estimate[0]+bias_x
-						if (state[2]<=512+5)&(state[2]>0-5):
-							break
-					while True:
-						bias_y=np.random.normal(0, loss/20+5)
-						state[3]=state_estimate[1]+bias_y
-						if (state[3]<=512+5)&(state[3]>0-5):
-							break
+				# if np.random.rand()<0.01:
+				# 	while True:
+				# 		bias_x=np.random.normal(0, loss/20+5)
+				# 		state[2]=state_estimate[0]+bias_x
+				# 		if (state[2]<=512+5)&(state[2]>0-5):
+				# 			break
+				# 	while True:
+				# 		bias_y=np.random.normal(0, loss/20+5)
+				# 		state[3]=state_estimate[1]+bias_y
+				# 		if (state[3]<=512+5)&(state[3]>0-5):
+				# 			break
 
-				if (e%100==98)|(e>5000):
+				if (e%100==0)|(e>5000):
 					env.render(pt=[[state[2], state[3]]])
 
 				err_x=[state[2]-state[4], state[0]-state[4]]
@@ -396,7 +406,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 			if r==0:
 				continue
 
-			_=sess.run(approx_net.train_op, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:np.asarray(old_state)[-1, 2:4].reshape((-1,2)), scale_factor:np.asarray(0.001+loss)})
+			_=sess.run(approx_net.train_op, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:np.asarray(old_state)[-1, 0:2].reshape((-1,2)), scale_factor:np.asarray(0.001+loss)})
 			# Display score
 			tqdm_e.set_description("Score: " + str(cumul_reward))
 			tqdm_e.refresh()
