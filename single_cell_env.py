@@ -269,7 +269,7 @@ class opticalTweezers():
         self.reward=0
         return np.asarray([self.p.x, self.p.y, user_x, user_y, self.ix, self.iy])
 
-    def render(self):
+    def render(self, pt=[]):
         ix, iy=obscurity(self.ix,self.iy) #
 
         x_min=0
@@ -287,6 +287,10 @@ class opticalTweezers():
 
         self.img=self.p.plot_point(self.img)
         self.img=cv2.circle(self.img,(int(self.user_x),int(self.user_y)),10,(0,0,255),1)
+        if len(pt)>0:
+            for p in pt:
+                x,y=p
+                self.img=cv2.circle(self.img,(int(x),int(y)),10,(0,255,0),1)
         cv2.imshow('rendered', self.img)
         cv2.waitKey(2)
 
@@ -404,6 +408,7 @@ class opticalTweezers():
         # if (self.ix>self.img.shape[0]+10)|(self.ix<-10):
         #     done=True
             # self.reward-=1
+        reward=0
         if (self.ix>self.img.shape[0]):
             self.ix=self.img.shape[0]
             self.dix=0
@@ -417,9 +422,9 @@ class opticalTweezers():
             self.iy=0
             self.diy=0
             # self.reward-=1
-        if np.sqrt((self.p.x-self.user_x)**2+(self.p.y-self.user_y)**2)<5:
+        if np.sqrt((self.p.x-self.user_x)**2+(self.p.y-self.user_y)**2)<10:
             done=True
-            self.reward+=1
+            self.reward=1
         info=None
         # self.reward=self._reward(action)
         # self.reward=float(self.reward)
@@ -561,18 +566,6 @@ class opticalTweezers_modelpredict():
 
             ix, iy=obscurity(self.ix,self.iy) #
 
-            # x_min=0
-            # y_min=0
-            # x_max,y_max=self.img.shape[:2]
-            # xx=np.linspace(x_min,x_max, x_max)
-            # yy=np.linspace(y_min,y_max, y_max)
-            # gauss_x_high = normal_pdf(xx, ix, laser_var)
-            # gauss_y_high = normal_pdf(yy, iy, laser_var)
-            # weights=np.array(np.meshgrid(gauss_x_high, gauss_y_high)).prod(0)
-            # # print(np.amax(weights))
-            # weights=(weights*255).astype(np.uint8)
-            # # weights=((weights-np.amin(weights))/(np.amax(weights/np.amin(weights)))).astype(np.uint8)
-            # self.img=cv2.applyColorMap(weights, cv2.COLORMAP_OCEAN) # try spring, autumn, bone, summer, jet, rainbow
 
             r=np.sqrt((self.p.x-ix)**2+(self.p.y-iy)**2) # radial distance
             F_applied=F_scatter(r)
@@ -587,7 +580,7 @@ class opticalTweezers_modelpredict():
             F_applied=0
             theta=0
         self.p.update(dt, Fx=-F_applied*np.cos(theta)*0.01, Fy=-F_applied*np.sin(theta)*0.01)
-
+        self.reward=0
 
         #other features to return
         done=False
@@ -603,9 +596,9 @@ class opticalTweezers_modelpredict():
         if (iy>self.img.shape[1]+10)|(iy<-10):
             done=True
             # self.reward-=1
-        if np.sqrt((self.p.x-self.user_x)**2+(self.p.y-self.user_y)**2)<5:
+        if np.sqrt((self.p.x-self.user_x)**2+(self.p.y-self.user_y)**2)<10:
             done=True
-            self.reward+=1
+            self.reward=1
         info=None
         # self.reward=self._reward(action)
         # self.reward=float(self.reward)

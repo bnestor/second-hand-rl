@@ -12,8 +12,21 @@ import scipy.stats
 from tqdm import tqdm
 import sys
 import os
+import csv
 
 
+def obscurity(state):
+	"""
+	random obscurity of x an y
+	"""
+	x=state[2]
+	y=state[3]
+	x2=np.sign(x-512/2)*0.9*(x-512/2)+512/2
+	y2=0.95*y
+	state2=state
+	state2[2]=x2
+	state2[3]=y2
+	return state2
 
 class Actor():
 	def __init__(self, states, actions, advantages, lr=1e-4):
@@ -44,6 +57,57 @@ class Actor():
 	def predict(self):
 		return self.out
 
+
+class Network():
+	def __init__(self, states, other_pred, scale_factor, lr=1e-4):
+		self.states=states
+		self.other_pred=other_pred
+		self.lr=lr
+		self.scale_factor=scale_factor
+		self.build_model()
+
+	def build_model(self):
+		#buld a 4 layer fc net for actor
+		# X=tf.placeholder([-1,6,4])
+		states_in=tf.layers.flatten(self.states)
+		a1=tf.layers.dense(inputs=states_in, units=64, activation=tf.nn.relu)
+		self.a2=tf.layers.dense(inputs=a1, units=128, activation=tf.nn.relu)
+		a3=tf.layers.dense(inputs=self.a2, units=128, activation=tf.nn.relu)
+		self.out=tf.layers.dense(inputs=a3, units=2, activation=tf.nn.relu)
+		#calculate the loss function
+		self.loss=tf.reduce_mean(tf.scalar_mul(self.scale_factor, tf.reduce_mean(tf.square(tf.subtract(self.out, self.other_pred)))))
+		optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
+		self.train_op = optimizer.minimize(loss=self.loss,global_step=tf.train.get_global_step())
+	def train(self):
+		return self.train_op
+	def predict(self):
+		return self.out
+
+
+class Network2():
+	def __init__(self, states, other_pred, scale_factor, lr=1e-4):
+		self.states=states
+		self.other_pred=other_pred
+		self.lr=lr
+		self.scale_factor=scale_factor
+		self.build_model()
+
+	def build_model(self):
+		#buld a 4 layer fc net for actor
+		# X=tf.placeholder([-1,6,4])
+		states_in=tf.layers.flatten(self.states)
+		a1=tf.layers.dense(inputs=states_in, units=64, activation=tf.nn.relu)
+		self.a2=tf.layers.dense(inputs=a1, units=128, activation=tf.nn.relu)
+		a3=tf.layers.dense(inputs=self.a2, units=128, activation=tf.nn.relu)
+		self.out=tf.layers.dense(inputs=a3, units=2, activation=tf.nn.sigmoid)
+		#calculate the loss function
+		self.loss=tf.reduce_mean(tf.scalar_mul(self.scale_factor, tf.reduce_mean(tf.square(tf.subtract(self.out, self.other_pred)))))
+		optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
+		self.train_op = optimizer.minimize(loss=self.loss,global_step=tf.train.get_global_step())
+	def train(self):
+		return self.train_op
+	def predict(self):
+		return self.out
 
 
 
@@ -188,24 +252,55 @@ def train_model(env, actor, critic, States, Actions, Rewards, Advantages, k=5000
 
 
 
-def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=5000):
+def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=10000):
 	""" Main A2C Training Algorithm
 	"""
 	# self.pretrain_random(env, args, summary_writer)
 	results = []
 	her=hindsight(batch_size=24)
 
+	#state action placeholders
+	States=tf.placeholder(tf.float32, shape=[None,2], name='States')
+	# Actions=tf.placeholder(tf.float32, shape=[None,2], name='Actions')
+	# Rewards=tf.placeholder(tf.float32, shape=[None,1], name='Rewards')
+	# Advantages=tf.placeholder(tf.float32, shape=[None,1], name='Advantages')
+	other=tf.placeholder(tf.float32, shape=[None,2], name='other')
+	scale_factor=tf.placeholder(tf.float32, shape=[], name='other')
+
+
+	#we need three networks:
+	random_net=Network(States, other, scale_factor)
+	certainty_net=Network(States, other, scale_factor)
+	approx_net=Network2(States, other, scale_factor)
+
+
 	with tf.Session() as sess:
 
 		sess.run(tf.initializers.global_variables())
 		sess.run(tf.initializers.local_variables())
 
+		#pretrain approx_net
+		data=[]
+		for i in tqdm(range(10000), desc='pretrain'):
+			state=np.random.randint(0, 512, 2).reshape(-1,2)
+			loss, _=sess.run([approx_net.loss, approx_net.train_op], feed_dict={States:state, other:state/512, scale_factor:np.asarray(1)})
+			data.append([str(i),str(loss)])
+
+		with open("output.csv", "w") as f:
+		    writer = csv.writer(f)
+		    writer.writerows(data)
+
+
+
+
 		# Main Loop
+		cumul_reward=0
+		data=[]
 		tqdm_e = tqdm(range(k), desc='Score', leave=True, unit=" episodes")
 		for e in tqdm_e:
 
 			# Reset episode
-			time, cumul_reward, done = 0, 0, False
+			time, done = 0, False
 			old_state = env.reset()
 			actions, states, rewards = [], [], []
 
@@ -216,23 +311,47 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 			err_x_old=[0,0]
 			err_y_old=[0,0]
 
-			# blend_x=blend_y=1
+			#calculate the errors
+			state_orig_1=old_state[-1]
+			#add obscurity
+			state=state_orig_1
+			state=obscurity(state_orig_1)
+			#calculate distillation network uncertainty
+			pred=sess.run(random_net.out, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2))})
+			loss, _ =sess.run([certainty_net.loss, certainty_net.train_op], feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:pred.reshape((-1,2)), scale_factor:np.asarray(1)})
 
+			state_estimate=sess.run(approx_net.out, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2))})
+			state_estimate=np.squeeze(state_estimate)*512
+
+
+			bias_x=np.random.randint(-512/2, 512/2)
+			bias_y=np.random.randint(-512/2, 512/2)
 			while not done:
-				if True:
-					env.render()
-				# Actor picks an action (following the policy)
-				# np.asarray([self.p.x/512, self.p.y/512, user_x/512, user_y/512, self.ix/512, self.iy/512])
+				state_orig=old_state[-1]
+				state=state_orig
+				state=obscurity(state_orig)
+				state[2]=state_estimate[0]+bias_x
+				state[3]=state_estimate[1]+bias_y
 
-				#calculate the errors
-				state=old_state[-1]
+				if np.random.rand()<0.01:
+					while True:
+						bias_x=np.random.normal(0, loss/20+5)
+						state[2]=state_estimate[0]+bias_x
+						if (state[2]<=512+5)&(state[2]>0-5):
+							break
+					while True:
+						bias_y=np.random.normal(0, loss/20+5)
+						state[3]=state_estimate[1]+bias_y
+						if (state[3]<=512+5)&(state[3]>0-5):
+							break
+
+				if (e%100==98)|(e>5000):
+					env.render(pt=[[state[2], state[3]]])
+
 				err_x=[state[2]-state[4], state[0]-state[4]]
 				err_y=[state[3]-state[5], state[1]-state[5]]
 
-				# print(state)
-				# print(err_x, err_y)
-				# print("\n")
-				#disturbance rejection_controller
+				#pd controller
 				kp=1
 				ki=0
 				kd=10
@@ -241,26 +360,11 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 				Fy=[err_y[0]*kp+ki*(err_y[0]+err_y_old[0])/2+kd*(err_y[0]-err_y_old[0]), err_y[1]*kp+ki*(err_y[1]+err_y_old[1])/2+kd*(err_y[1]-err_y_old[1])]
 
 
-				# blend_x=blend_y=1
-				# if np.sqrt((state[0]-state[4])**2+(state[1]-state[5])**2)<30:
-				# 	blend_x=0
-				# 	blend_y=0
-
 				blend_x=1-scipy.stats.norm(0, 10).cdf(np.abs(state[0]-state[4]))
 				blend_y=1-scipy.stats.norm(0, 10).cdf(np.abs(state[1]-state[5]))
 
 				# blend_x=0.5+0.5*np.erf(np.log(np.abs(state[0]-state[4]))/(np.sqrt(2)*2))
 				# blend_y=0.5+0.5*np.erf(np.log(np.abs(state[1]-state[5]))/(np.sqrt(2)*2))
-
-				# blend_x=1
-				# blend_y=1
-
-				# if (np.abs(state[0]-state[4])<40)|(np.abs(state[1]-state[5])<40):
-				# 	blend_x=blend_y=0
-					# print(blend_x)
-
-
-
 
 				err_x_old=err_x
 				err_y_old=err_y
@@ -268,17 +372,6 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 				a=[Fx[0]*blend_x+Fx[1]*(1-blend_x), Fy[0]*blend_y+Fy[1]*(1-blend_y)]
 
 
-
-				# if e<128:
-				# 	a=np.random.normal(0, 2, size=(2))
-				# elif np.random.rand()<0.1:
-				# 	a=np.random.normal(0, 2, size=(2))
-				# else:
-				# 	a=sess.run(actor.predict(), feed_dict={States: np.asarray(old_state).reshape(-1,4,6)}).squeeze()
-				# 	if np.any(np.isnan(a)):
-				# 		print(a)
-					# print(a)
-				#feedforward
 				# Retrieve new state, reward, and whether the state is terminal
 				new_state, r, done, _ = env.step(a)
 
@@ -300,49 +393,23 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 
 				# Train using discounted rewards ie. compute updates
 				# print(np.asarray(states).shape)
-			assert len(states)==len(actions)
-			her.add(states, np.asarray(actions), rewards)
-				# print(np.asarray(states).shape, np.asarray(actions).shape, np.asarray(rewards).shape)
-				# only update every 10 episodes?
-			if e>24:
-				for item in her.sample():
-					states2, actions2, rewards2, completed=item
-					# print(len(states2), len(actions2), len(rewards2))
-					# print(np.asarray(states).shape, np.asarray(actions).shape, np.asarray(rewards).shape)
-					states2=np.asarray(states2)[-min(1000, len(rewards2)):]
-					actions2=np.asarray(actions2)[-min(1000, len(rewards2)):]
-					rewards2=np.asarray(rewards2)[-min(1000, len(rewards2)):]
+			if r==0:
+				continue
 
-
-					# discount the rewards
-					discounted_r=discount(rewards2).reshape((-1,1))
-
-					# compute the advantages
-					state_values = sess.run([critic.predict()], feed_dict={States:states2})
-
-					# print(discounted_r.shape)
-					# print(np.squeeze(state_values).shape)
-					advantages = (np.squeeze(discounted_r) - np.squeeze(state_values)).reshape(-1,1)
-					# print(len(advantages[np.where(advantages<0)]))
-					#advantage between -1 and 1
-					advantages=1+np.abs(advantages)
-
-					# print(len(states2))
-					# print(actions2.shape)
-					# print(len(advantages))
-
-
-					# run the training operations
-					actor_loss,_=sess.run([actor.loss, actor.train_op], feed_dict={States:states2, Actions:actions2, Advantages:advantages})
-					# print(actor_loss)
-					critic_loss, _=sess.run([critic.critic_loss, critic.train_op], feed_dict={States:states2, Rewards:discounted_r})
-
-			# Gather stats every episode for plotting
-			results.append([e, np.mean(rewards), np.std(rewards)])
-
+			_=sess.run(approx_net.train_op, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:np.asarray(old_state)[-1, 2:4].reshape((-1,2)), scale_factor:np.asarray(0.001+loss)})
 			# Display score
 			tqdm_e.set_description("Score: " + str(cumul_reward))
 			tqdm_e.refresh()
+			data.append([str(e), str(cumul_reward)])
+			if e%100==33:
+				with open("output.csv", "w") as f:
+				    writer = csv.writer(f)
+				    writer.writerows(data)
+
+	with open("output.csv", "w") as f:
+	    writer = csv.writer(f)
+	    writer.writerows(data)
+
 
 
 
