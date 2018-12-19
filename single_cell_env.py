@@ -260,12 +260,14 @@ class opticalTweezers():
         self.user_y=user_y
         self.ix=self.p.x+np.random.normal(0, 10,1)
         self.iy=self.p.y+np.random.normal(0, 10,1)
+        self.ix=np.random.randint(img.shape[0])
+        self.iy=np.random.randint(img.shape[1])
         self.dix=0
         self.diy=0
         # self.history=[[self.p.x, self.p.y, user_x, user_y] for item in self.history]
         self.time_old=0
         self.reward=0
-        return np.asarray([self.p.x, self.p.y, user_x, user_y, self.ix, self.iy])
+        return np.asarray([self.p.x/512, self.p.y/512, user_x/512, user_y/512, self.ix/512, self.iy/512])
 
     def render(self):
         ix, iy=obscurity(self.ix,self.iy) #
@@ -299,7 +301,15 @@ class opticalTweezers():
         return reward
 
     def step(self, action, drawing=True, dt=0.1):
-        dix,diy,yes_x, yes_y=action
+        if len(action)==2:
+            dix, diy=action
+        else:
+            dix,diy,yes_x, yes_y=action
+            dix=-1 if dix<0.5 else 1
+            diy=-1 if diy<0.5 else 1
+            dix=0 if yes_x<0.5 else dix
+            diy=0 if yes_y<0.5 else diy
+
 
 
 
@@ -336,10 +346,10 @@ class opticalTweezers():
                 return dYdt
             a_t=np.arange(0,dt, dt/5)
             m=1
-            b=0.01
+            b=0.1
             k=0
-            Fx=(dix-0.5)#*yes_x
-            Fy=(diy-0.5)#*yes_y
+            Fx=(dix)#*yes_x
+            Fy=(diy)#*yes_y
             sol_x=scipy.integrate.odeint(dynamic_x, [self.ix, self.dix], a_t, args=(m, b, k, Fx))
             sol_y=scipy.integrate.odeint(dynamic_y, [self.iy, self.diy], a_t, args=(m, b, k, Fy))
 
@@ -417,8 +427,197 @@ class opticalTweezers():
         # self.reward=self._reward(action)
         # self.reward=float(self.reward)
 
-        self.observation_space=np.asarray([self.p.x, self.p.y, self.user_x,self.user_y, self.ix, self.iy])
+        self.observation_space=np.asarray([self.p.x/512, self.p.y/512, self.user_x/512,self.user_y/512, self.ix/512, self.iy/512])
+        # self.observation_space[np.where(self.observation_space<0)]=0
+        # self.observation_space[np.where(self.observation_space>1)]=1
         return self.observation_space, self.reward, done, info
+
+
+class opticalTweezers_modelpredict():
+    def __init__(self, consecutive_frames=1):
+        self.drawing = False # true if mouse is pressed
+        self.mode = True # if True, draw rectangle. Press 'm' to toggle to curve
+        # self.ix,self.iy = -1,-1
+        self.img = np.zeros((512,512,3), np.uint8)
+        self.laser_var=10
+        self.laser_mag=10000
+        # self.consecutive_frames=consecutive_frames
+        # self.history=[None for i in range(self.consecutive_frames)]
+        self.reset()
+        self.actions_space=[0, 0]
+
+        self.action_log=[]
+
+        self.action_space=[-1, -1, -1,-1]
+        self.observation_space=[self.p.x, self.p.y, -1,-1,-1,-1]
+
+
+    def reset(self, user_x=None, user_y=None):
+        self.img = np.zeros((512,512,3), np.uint8)
+        self.p=point(x=np.random.randint(img.shape[0]), y=np.random.randint(img.shape[1]))
+        if (user_x==None)|(user_y==None):
+            user_x=np.random.randint(img.shape[0])
+            user_y=np.random.randint(img.shape[1])
+        self.user_x=user_x
+        self.user_y=user_y
+        self.ix=self.p.x+np.random.normal(0, 10,1)
+        self.iy=self.p.y+np.random.normal(0, 10,1)
+        self.dix=0
+        self.diy=0
+        # self.history=[[self.p.x, self.p.y, user_x, user_y] for item in self.history]
+        self.time_old=0
+        self.reward=0
+        return np.asarray([self.p.x/512, self.p.y/512, user_x/512, user_y/512, self.ix/512, self.iy/512])
+
+    def render(self):
+        ix, iy=obscurity(self.ix,self.iy) #
+
+        x_min=0
+        y_min=0
+        x_max,y_max=self.img.shape[:2]
+        xx=np.linspace(x_min,x_max, x_max)
+        yy=np.linspace(y_min,y_max, y_max)
+        gauss_x_high = normal_pdf(xx, ix, laser_var)
+        gauss_y_high = normal_pdf(yy, iy, laser_var)
+        weights=np.array(np.meshgrid(gauss_x_high, gauss_y_high)).prod(0)
+        # print(np.amax(weights))
+        weights=(weights*255).astype(np.uint8)
+        # weights=((weights-np.amin(weights))/(np.amax(weights/np.amin(weights)))).astype(np.uint8)
+        self.img=cv2.applyColorMap(weights, cv2.COLORMAP_OCEAN) # try spring, autumn, bone, summer, jet, rainbow
+
+        self.img=self.p.plot_point(self.img)
+        self.img=cv2.circle(self.img,(int(self.user_x),int(self.user_y)),10,(0,0,255),1)
+        cv2.imshow('rendered', self.img)
+        cv2.waitKey(2)
+
+    def _reward(self, action):
+        dix,diy=action
+        reward=0
+        #add reward for moving towards agent
+        reward+=0.001*(self.p.x-self.ix)*dix+0.001*(self.p.y-self.iy)*diy
+        #add rewardfor moving p towards target
+        r=np.sqrt((self.p.x-self.ix)**2+(self.p.y-self.iy)**2)
+        reward+=normal_pdf(r, 0, 10)*((self.user_x-self.ix)*dix+(self.user_y-self.iy)*diy)
+        return reward
+
+    def step(self, action, drawing=True, dt=0.1):
+        if len(action)==2:
+            dix, diy=action
+        else:
+            dix,diy,yes_x, yes_y=action
+            dix=-1 if dix<0.5 else 1
+            diy=-1 if diy<0.5 else 1
+            dix=0 if yes_x<0.5 else dix
+            diy=0 if yes_y<0.5 else diy
+
+        #m, b=model
+
+
+
+
+
+        if drawing:
+            reward_baseline=dt*normal_pdf(np.sqrt((self.p.x-self.user_x)**2+(self.p.y-self.user_y)**2), 0, 10)
+
+            #update the controller dynamics
+
+            def dynamic_x(X, t, m, b, k, Fx):
+                x, dx=X
+                dXdt=[dx,-b/m*dx-k/m*x+Fx]
+                return dXdt # velocity,acceleration
+
+            def dynamic_y(Y, t, m, b, k, Fy):
+                y, dy=Y
+                dYdt=[dy, -b/m*dy-k/m*y+Fy]
+                return dYdt
+            a_t=np.arange(0,dt, dt/5)
+            m=1
+            b=0.01
+            k=0
+            Fx=(dix)#*yes_x
+            Fy=(diy)#*yes_y
+            sol_x=scipy.integrate.odeint(dynamic_x, [self.ix, self.dix], a_t, args=(m, b, k, Fx))
+            sol_y=scipy.integrate.odeint(dynamic_y, [self.iy, self.diy], a_t, args=(m, b, k, Fy))
+
+            # print(Fx,self.dx,Fy,self.dy)
+
+            # print(Fx,Fy)
+            self.dix=sol_x[-1,1]
+            self.ix=sol_x[-1,0]
+            self.diy=sol_y[-1,1]
+            self.iy=sol_y[-1,0]
+
+            #check to see if dynamics are violated
+            # if (self.ix<0):
+            #     self.dix=0
+            #     self.ix=0
+            # elif(self.ix>img.shape[0]):
+            #     self.dix=0
+            #     self.ix=img.shape[0]
+            # if (self.iy<0):
+            #     self.diy=0
+            #     self.iy=0
+            # elif(self.iy>img.shape[1]):
+            #     self.diy=0
+            #     self.yx=img.shape[1]
+
+
+            ix, iy=obscurity(self.ix,self.iy) #
+
+            # x_min=0
+            # y_min=0
+            # x_max,y_max=self.img.shape[:2]
+            # xx=np.linspace(x_min,x_max, x_max)
+            # yy=np.linspace(y_min,y_max, y_max)
+            # gauss_x_high = normal_pdf(xx, ix, laser_var)
+            # gauss_y_high = normal_pdf(yy, iy, laser_var)
+            # weights=np.array(np.meshgrid(gauss_x_high, gauss_y_high)).prod(0)
+            # # print(np.amax(weights))
+            # weights=(weights*255).astype(np.uint8)
+            # # weights=((weights-np.amin(weights))/(np.amax(weights/np.amin(weights)))).astype(np.uint8)
+            # self.img=cv2.applyColorMap(weights, cv2.COLORMAP_OCEAN) # try spring, autumn, bone, summer, jet, rainbow
+
+            r=np.sqrt((self.p.x-ix)**2+(self.p.y-iy)**2) # radial distance
+            F_applied=F_scatter(r)
+            F_applied=I(r)
+            theta=np.arctan((self.p.y-iy)/(self.p.x-ix))
+            self.reward=dt*normal_pdf(np.sqrt((self.p.x-self.user_x)**2+(self.p.y-self.user_y)**2), 0, 10)-reward_baseline
+            if (self.p.x<ix):
+                theta=theta+np.pi
+
+        else:
+            self.img=self.img*0
+            F_applied=0
+            theta=0
+        self.p.update(dt, Fx=-F_applied*np.cos(theta)*0.01, Fy=-F_applied*np.sin(theta)*0.01)
+
+
+        #other features to return
+        done=False
+        if (self.p.x>self.img.shape[0]+10)|(self.p.x<-10):
+            done=True
+            # self.reward-=1
+        if (self.p.y>self.img.shape[1]+10)|(self.p.y<-10):
+            done=True
+            # self.reward-=1
+        if (ix>self.img.shape[0]+10)|(ix<-10):
+            done=True
+            # self.reward-=1
+        if (iy>self.img.shape[1]+10)|(iy<-10):
+            done=True
+            # self.reward-=1
+        if np.sqrt((self.p.x-self.user_x)**2+(self.p.y-self.user_y)**2)<5:
+            done=True
+            self.reward+=1
+        info=None
+        # self.reward=self._reward(action)
+        # self.reward=float(self.reward)
+
+        self.observation_space=np.asarray([self.p.x/512, self.p.y/512, self.user_x/512,self.user_y/512, self.ix/512, self.iy/512])
+        # self.observation_space[np.where(self.observation_space<0)]=0
+        # self.observation_space[np.where(self.observation_space>1)]=1
+        return self.observation_space, self.reward, done, info
+
 
 
 if __name__=="__main__":

@@ -1,5 +1,6 @@
 import numpy as np
 from keras.optimizers import RMSprop
+from keras.optimizers import SGD, Adam
 
 class Agent:
     """ Agent Generic Class
@@ -9,6 +10,7 @@ class Agent:
         self.inp_dim = inp_dim
         print(inp_dim)
         self.out_dim = out_dim
+        self.adam=Adam(lr=lr)
         self.rms_optimizer =  RMSprop(lr=lr, epsilon=0.1, rho=0.99)
 
     def fit(self, inp, targ):

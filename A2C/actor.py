@@ -1,8 +1,9 @@
 import numpy as np
+import tensorflow as tf
 import keras.backend as K
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Flatten
+from keras.layers import Input, Activation, Dense, Flatten
 from keras.layers.advanced_activations import LeakyReLU
 from keras.optimizers import Adam
 from .agent import Agent
@@ -19,8 +20,8 @@ class Actor(Agent):
     def addHead(self, network):
         """ Assemble Actor network to predict probability of each action
         """
-        x = Dense(128, activation='elu')(network.output)
-        out = Dense(self.out_dim, activation='linear')(x)
+        x = Dense(128, activation='relu')(network.output)
+        out = Dense(self.out_dim, activation='relu')(x)
         return Model(network.input, out)
 
     def optimizer(self):
@@ -31,6 +32,7 @@ class Actor(Agent):
         eligibility = K.log(weighted_actions + 1e-10) * K.stop_gradient(self.advantages_pl)
         entropy = K.sum(self.model.output * K.log(self.model.output + 1e-10), axis=1)
         loss = 0.01 * entropy - K.sum(eligibility)
-
-        updates = self.rms_optimizer.get_updates(self.model.trainable_weights, [], loss)
-        return K.function([self.model.input, self.action_pl, self.advantages_pl], [], updates=updates)
+        with tf.device('/cpu:0'):
+            updates = self.adam.get_updates(self.model.trainable_weights, [], loss)
+            result=K.function([self.model.input, self.action_pl, self.advantages_pl], [], updates=updates)
+        return result
