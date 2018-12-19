@@ -130,7 +130,7 @@ def train_model(env, actor, critic, States, Actions, Rewards, Advantages, k=5000
 
 				# compute the novelty
 				# print(self.env_dim[1])
-				
+
 				rewards.append(r)
 				# Update current state
 				old_state = new_state
@@ -154,7 +154,7 @@ def train_model(env, actor, critic, States, Actions, Rewards, Advantages, k=5000
 					actions2=np.asarray(actions2)[-min(1000, len(rewards2)):]
 					rewards2=np.asarray(rewards2)[-min(1000, len(rewards2)):]
 
-					
+
 					# discount the rewards
 					discounted_r=discount(rewards2).reshape((-1,1))
 
@@ -171,8 +171,8 @@ def train_model(env, actor, critic, States, Actions, Rewards, Advantages, k=5000
 					# print(len(states2))
 					# print(actions2.shape)
 					# print(len(advantages))
-					
-					
+
+
 					# run the training operations
 					actor_loss,_=sess.run([actor.loss, actor.train_op], feed_dict={States:states2, Actions:actions2, Advantages:advantages})
 					# print(actor_loss)
@@ -216,7 +216,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 			err_x_old=[0,0]
 			err_y_old=[0,0]
 
-			blend_x=blend_y=1
+			# blend_x=blend_y=1
 
 			while not done:
 				if True:
@@ -229,31 +229,35 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 				err_x=[state[2]-state[4], state[0]-state[4]]
 				err_y=[state[3]-state[5], state[1]-state[5]]
 
+				# print(state)
+				# print(err_x, err_y)
+				# print("\n")
 				#disturbance rejection_controller
-				kp=2
+				kp=1
 				ki=0
-				kd=0
+				kd=10
 
 				Fx=[err_x[0]*kp+ki*(err_x[0]+err_x_old[0])/2+kd*(err_x[0]-err_x_old[0]), err_x[1]*kp+ki*(err_x[1]+err_x_old[1])/2+kd*(err_x[1]-err_x_old[1])]
 				Fy=[err_y[0]*kp+ki*(err_y[0]+err_y_old[0])/2+kd*(err_y[0]-err_y_old[0]), err_y[1]*kp+ki*(err_y[1]+err_y_old[1])/2+kd*(err_y[1]-err_y_old[1])]
-				
+
 
 				# blend_x=blend_y=1
 				# if np.sqrt((state[0]-state[4])**2+(state[1]-state[5])**2)<30:
 				# 	blend_x=0
 				# 	blend_y=0
 
-				# blend_x=np.round(scipy.stats.norm(0, 100).cdf(np.abs(state[0]-state[4])))
-				# blend_y=np.round(scipy.stats.norm(0, 100).cdf(np.abs(state[1]-state[5])))
+				blend_x=1-scipy.stats.norm(0, 10).cdf(np.abs(state[0]-state[4]))
+				blend_y=1-scipy.stats.norm(0, 10).cdf(np.abs(state[1]-state[5]))
 
-				# blend_x=1-0.5+0.5*np.erf(np.log(np.abs(state[0]-state[4]))/(np.sqrt(2)*2))
-				# blend_y=1-0.5+0.5*np.erf(np.log(np.abs(state[1]-state[5]))/(np.sqrt(2)*2))
+				# blend_x=0.5+0.5*np.erf(np.log(np.abs(state[0]-state[4]))/(np.sqrt(2)*2))
+				# blend_y=0.5+0.5*np.erf(np.log(np.abs(state[1]-state[5]))/(np.sqrt(2)*2))
 
 				# blend_x=1
 				# blend_y=1
 
-				if (np.abs(state[0]-state[4])<40)|(np.abs(state[1]-state[5])<40):
-					blend_x=blend_y=0
+				# if (np.abs(state[0]-state[4])<40)|(np.abs(state[1]-state[5])<40):
+				# 	blend_x=blend_y=0
+					# print(blend_x)
 
 
 
@@ -285,7 +289,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 
 				# compute the novelty
 				# print(self.env_dim[1])
-				
+
 				rewards.append(r)
 				# Update current state
 				old_state = new_state
@@ -309,7 +313,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 					actions2=np.asarray(actions2)[-min(1000, len(rewards2)):]
 					rewards2=np.asarray(rewards2)[-min(1000, len(rewards2)):]
 
-					
+
 					# discount the rewards
 					discounted_r=discount(rewards2).reshape((-1,1))
 
@@ -326,8 +330,8 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=500
 					# print(len(states2))
 					# print(actions2.shape)
 					# print(len(advantages))
-					
-					
+
+
 					# run the training operations
 					actor_loss,_=sess.run([actor.loss, actor.train_op], feed_dict={States:states2, Actions:actions2, Advantages:advantages})
 					# print(actor_loss)
