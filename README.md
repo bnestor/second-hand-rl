@@ -4,7 +4,6 @@ project forked from https://github.com/germain-hug/Deep-RL-Keras
 
 # Running
 ```bash
-$ python main.py --type A2C --env cell --render
 $ python actor_critic.py
 ```
 

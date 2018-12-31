@@ -43,13 +43,13 @@ class Actor():
 		a1=tf.layers.dense(inputs=states_in, units=64, activation=tf.nn.relu)
 		self.a2=tf.layers.dense(inputs=a1, units=128, activation=tf.nn.relu)
 		a3=tf.layers.dense(inputs=self.a2, units=128, activation=tf.nn.relu)
-		self.out=tf.layers.dense(inputs=a3, units=2, activation=None)
+		self.out=tf.layers.dense(inputs=a3, units=2, activation=tf.nn.relu)
 
 
 		#calculate the loss function
-		self.loss=tf.reduce_sum(tf.multiply(tf.reduce_mean(tf.square(tf.subtract(self.out, self.actions))),self.advantages))
+		self.loss=tf.reduce_sum(tf.multiply(tf.reduce_mean(tf.square(tf.subtract(self.out, tf.maximum(self.actions+100, 0)))),self.advantages))
 
-		optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
+		optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
 		self.train_op = optimizer.minimize(loss=self.loss,global_step=tf.train.get_global_step())
 
 	def train(self):
@@ -175,8 +175,9 @@ def train_model(env, actor, critic, States, Actions, Rewards, Advantages, k=5000
 				do_random=True
 
 			while not done:
-				if (e%64==1)&(e>30):
-					env.render()
+				# if (e%64==1)&(e>30):
+				# 	env.render()
+				env.render()
 				# Actor picks an action (following the policy)
 
 				if e<128:
@@ -267,7 +268,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 	her=hindsight(batch_size=24)
 
 	#state action placeholders
-	States=tf.placeholder(tf.float32, shape=[None,2], name='States')
+	# States=tf.placeholder(tf.float32, shape=[None,2], name='States')
 	# Actions=tf.placeholder(tf.float32, shape=[None,2], name='Actions')
 	# Rewards=tf.placeholder(tf.float32, shape=[None,1], name='Rewards')
 	# Advantages=tf.placeholder(tf.float32, shape=[None,1], name='Advantages')
@@ -276,9 +277,9 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 
 
 	#we need three networks:
-	random_net=Network(States, other, scale_factor)
-	certainty_net=Network(States, other, scale_factor)
-	approx_net=Network2(States, other, scale_factor)
+	# random_net=Network(States, other, scale_factor)
+	# certainty_net=Network(States, other, scale_factor)
+	# approx_net=Network2(States, other, scale_factor)
 
 
 	with tf.Session() as sess:
@@ -286,22 +287,21 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 		sess.run(tf.initializers.global_variables())
 		sess.run(tf.initializers.local_variables())
 
-		#pretrain approx_net
-		data=[]
-		for i in tqdm(range(10000), desc='pretrain'):
-			state=np.random.randint(0, 512, 2).reshape(-1,2)
-			loss, _=sess.run([approx_net.loss, approx_net.train_op], feed_dict={States:state, other:(state/512), scale_factor:np.asarray(1)})
-			data.append([str(i),str(loss)])
+		# #pretrain approx_net
+		# data=[]
+		# for i in tqdm(range(10000), desc='pretrain'):
+		# 	state=np.random.randint(0, 512, 2).reshape(-1,2)
+		# 	loss, _=sess.run([approx_net.loss, approx_net.train_op], feed_dict={States:state, other:(state/512), scale_factor:np.asarray(1)})
+		# 	data.append([str(i),str(loss)])
 
-		with open("output.csv", "w") as f:
-		    writer = csv.writer(f)
-		    writer.writerows(data)
+		# with open("output.csv", "w") as f:
+		#     writer = csv.writer(f)
+		#     writer.writerows(data)
 
 
 
 
 		# Main Loop
-		cumul_reward=0
 		data=[]
 		tqdm_e = tqdm(range(k), desc='Score', leave=True, unit=" episodes")
 		for e in tqdm_e:
@@ -322,68 +322,80 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 			state_orig_1=old_state[-1]
 			#add obscurity
 			state=state_orig_1
-			state=obscurity(state_orig_1)
+			# state=obscurity(state_orig_1)
 			#calculate distillation network uncertainty
-			pred=sess.run(random_net.out, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2))})
-			loss, _ =sess.run([certainty_net.loss, certainty_net.train_op], feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:pred.reshape((-1,2)), scale_factor:np.asarray(1)})
+			# pred=sess.run(random_net.out, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2))})
+			# loss, _ =sess.run([certainty_net.loss, certainty_net.train_op], feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:pred.reshape((-1,2)), scale_factor:np.asarray(1)})
 
-			state_estimate=sess.run(approx_net.out, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2))})
-			state_estimate=np.squeeze(state_estimate)
-			state_estimate[np.where(state_estimate>1)]=1
-			state_estimate=(state_estimate)*512
-			print(state_estimate)
+			# state_estimate=sess.run(approx_net.out, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2))})
+			# state_estimate=np.squeeze(state_estimate)
+			# state_estimate[np.where(state_estimate>1)]=1
+			# state_estimate=(state_estimate)*512
 
 
 			bias_x=0
 			bias_y=0
-			while not done:
+			num_steps=0
+			cumul_reward=0
+			do_a2c=np.random.randint(2, size=1)
+			# while not done:
+			while True:
 				state_orig=old_state[-1]
 				state=state_orig
-				state=obscurity(state_orig)
-				state[2]=state_estimate[0]+bias_x
-				state[3]=state_estimate[1]+bias_y
+				# state=obscurity(state_orig)
+				# state[2]=state_estimate[0]+bias_x
+				# state[3]=state_estimate[1]+bias_y
 
-				# if np.random.rand()<0.01:
-				# 	while True:
-				# 		bias_x=np.random.normal(0, loss/20+5)
-				# 		state[2]=state_estimate[0]+bias_x
-				# 		if (state[2]<=512+5)&(state[2]>0-5):
-				# 			break
-				# 	while True:
-				# 		bias_y=np.random.normal(0, loss/20+5)
-				# 		state[3]=state_estimate[1]+bias_y
-				# 		if (state[3]<=512+5)&(state[3]>0-5):
-				# 			break
+				#noisy terminal state
+				# if np.random.rand()<0.1:
+				# 	bias_x=np.random.normal(state_orig[2], 7)
+				# 	bias_y=np.random.normal(state_orig[3], 7)
+				# state[2]=state_estimate[0]+bias_x
+				# state[3]=state_estimate[1]+bias_y
 
 				if (e%100==0)|(e>5000):
 					env.render(pt=[[state[2], state[3]]])
+				# env.render(pt=[[state[2], state[3]]])
 
-				err_x=[state[2]-state[4], state[0]-state[4]]
-				err_y=[state[3]-state[5], state[1]-state[5]]
+				if do_a2c:
+					#this
+					if e>1000:
+						print('do_a2c')
+					a=sess.run(actor.predict(), feed_dict={States: np.asarray(old_state).reshape(-1,4,6)}).squeeze()
+					a=a-100
+				else:
+					if e>1000:
+						print('controller')
+					err_x=[state[2]-state[4], state[0]-state[4]]
+					err_y=[state[3]-state[5], state[1]-state[5]]
 
-				#pd controller
-				kp=1
-				ki=0
-				kd=10
+					#pd controller
+					kp=1
+					ki=0
+					kd=10
 
-				Fx=[err_x[0]*kp+ki*(err_x[0]+err_x_old[0])/2+kd*(err_x[0]-err_x_old[0]), err_x[1]*kp+ki*(err_x[1]+err_x_old[1])/2+kd*(err_x[1]-err_x_old[1])]
-				Fy=[err_y[0]*kp+ki*(err_y[0]+err_y_old[0])/2+kd*(err_y[0]-err_y_old[0]), err_y[1]*kp+ki*(err_y[1]+err_y_old[1])/2+kd*(err_y[1]-err_y_old[1])]
+					Fx=[err_x[0]*kp+ki*(err_x[0]+err_x_old[0])/2+kd*(err_x[0]-err_x_old[0]), err_x[1]*kp+ki*(err_x[1]+err_x_old[1])/2+kd*(err_x[1]-err_x_old[1])]
+					Fy=[err_y[0]*kp+ki*(err_y[0]+err_y_old[0])/2+kd*(err_y[0]-err_y_old[0]), err_y[1]*kp+ki*(err_y[1]+err_y_old[1])/2+kd*(err_y[1]-err_y_old[1])]
 
 
-				blend_x=1-scipy.stats.norm(0, 10).cdf(np.abs(state[0]-state[4]))
-				blend_y=1-scipy.stats.norm(0, 10).cdf(np.abs(state[1]-state[5]))
+					blend_x=1-scipy.stats.norm(0, 10).cdf(np.abs(state[0]-state[4]))
+					blend_y=1-scipy.stats.norm(0, 10).cdf(np.abs(state[1]-state[5]))
 
-				# blend_x=0.5+0.5*np.erf(np.log(np.abs(state[0]-state[4]))/(np.sqrt(2)*2))
-				# blend_y=0.5+0.5*np.erf(np.log(np.abs(state[1]-state[5]))/(np.sqrt(2)*2))
+					# blend_x=0.5+0.5*np.erf(np.log(np.abs(state[0]-state[4]))/(np.sqrt(2)*2))
+					# blend_y=0.5+0.5*np.erf(np.log(np.abs(state[1]-state[5]))/(np.sqrt(2)*2))
 
-				err_x_old=err_x
-				err_y_old=err_y
+					err_x_old=err_x
+					err_y_old=err_y
 
-				a=[Fx[0]*blend_x+Fx[1]*(1-blend_x), Fy[0]*blend_y+Fy[1]*(1-blend_y)]
+					a=[Fx[0]*blend_x+Fx[1]*(1-blend_x), Fy[0]*blend_y+Fy[1]*(1-blend_y)]
+					# print(a)
+					a=[a[0]+np.random.normal(0,abs(err_x[0])*0.5+0.1), a[1]+np.random.normal(0,abs(err_y[0])*0.5+0.1)]
 
 
 				# Retrieve new state, reward, and whether the state is terminal
 				new_state, r, done, _ = env.step(a)
+				num_steps+=1
+
 
 				# Memorize (s, a, r) for training
 				# actions.append(to_categorical(a, self.act_dim))
@@ -399,22 +411,62 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 				cumul_reward += r
 				time += 1
 
+				if num_steps==1500:
+					break
+
 
 
 				# Train using discounted rewards ie. compute updates
 				# print(np.asarray(states).shape)
-			if r==0:
-				continue
 
-			_=sess.run(approx_net.train_op, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:np.asarray(old_state)[-1, 0:2].reshape((-1,2)), scale_factor:np.asarray(0.001+loss)})
-			# Display score
 			tqdm_e.set_description("Score: " + str(cumul_reward))
 			tqdm_e.refresh()
-			data.append([str(e), str(cumul_reward)])
+			data.append([str(e),str(do_a2c), str(cumul_reward)])
 			if e%100==33:
 				with open("output.csv", "w") as f:
 				    writer = csv.writer(f)
 				    writer.writerows(data)
+			if cumul_reward<1:
+				continue
+			her.add(states, np.asarray(actions), rewards)
+
+			if len(her.objects)>24:
+				for item in her.sample():
+					states2, actions2, rewards2, completed=item
+					# print(len(states2), len(actions2), len(rewards2))
+					# print(np.asarray(states).shape, np.asarray(actions).shape, np.asarray(rewards).shape)
+					states2=np.asarray(states2)[-min(1000, len(rewards2)):]
+					actions2=np.asarray(actions2)[-min(1000, len(rewards2)):]
+					rewards2=np.asarray(rewards2)[-min(1000, len(rewards2)):]
+
+
+					# discount the rewards
+					discounted_r=discount(rewards2).reshape((-1,1))
+
+					# compute the advantages
+					state_values = sess.run([critic.predict()], feed_dict={States:states2})
+
+					# print(discounted_r.shape)
+					# print(np.squeeze(state_values).shape)
+					advantages = (np.squeeze(discounted_r) - np.squeeze(state_values)).reshape(-1,1)
+					# print(len(advantages[np.where(advantages<0)]))
+					#advantage between -1 and 1
+					advantages=1+np.abs(advantages)
+
+					# print(len(states2))
+					# print(actions2.shape)
+					# print(len(advantages))
+
+
+					# run the training operations
+					actor_loss,_=sess.run([actor.loss, actor.train_op], feed_dict={States:states2, Actions:actions2, Advantages:advantages})
+					# print(actor_loss)
+					critic_loss, _=sess.run([critic.critic_loss, critic.train_op], feed_dict={States:states2, Rewards:discounted_r})
+					# print(actor_loss, critic_loss)
+			# _=sess.run(approx_net.train_op, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:np.asarray(old_state)[-1, 0:2].reshape((-1,2)), scale_factor:np.asarray(0.001+loss)})
+			# print(num_steps)
+			# Display score
+			
 
 	with open("output.csv", "w") as f:
 	    writer = csv.writer(f)

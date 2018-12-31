@@ -252,8 +252,9 @@ class A2C:
             actions, states, rewards = [], [], []
 
             while not done:
-                if (e%64==1)&(e>30):
-                    if args.render: env.render()
+                if args.render: env.render()
+                # if (e%64==1)&(e>30):
+                #     if args.render: env.render()
                 # Actor picks an action (following the policy)
                 
                 if e<30:
