@@ -7,6 +7,10 @@ from single_cell_env import opticalTweezers
 from utils.continuous_environments import Environment
 from hindsight import hindsight
 
+# This function selects the probability distribution over actions
+# from baselines.common.distributions import make_pdtype
+from stable_baselines.common.distributions import make_proba_dist_type
+
 import scipy.stats
 
 from tqdm import tqdm
@@ -34,27 +38,32 @@ class Actor():
 		self.actions=actions
 		self.advantages=advantages
 		self.lr=lr
+		self.pdtype = make_proba_dist_type(action_space)
 		self.build_model()
 
 	def build_model(self):
 		#buld a 4 layer fc net for actor
 		# X=tf.placeholder([-1,6,4])
 		states_in=tf.layers.flatten(self.states)
-		a1=tf.layers.dense(inputs=states_in, units=64, activation=tf.nn.relu)
-		self.a2=tf.layers.dense(inputs=a1, units=128, activation=tf.nn.relu)
-		a3=tf.layers.dense(inputs=self.a2, units=128, activation=tf.nn.relu)
-		self.out=tf.layers.dense(inputs=a3, units=2, activation=tf.nn.relu)
+		with tf.variable_scope("model", reuse = reuse):
+			a1=tf.layers.dense(inputs=states_in, units=64, activation=tf.nn.relu)
+			self.a2=tf.layers.dense(inputs=a1, units=128, activation=tf.nn.relu)
+			self.a3=tf.layers.dense(inputs=self.a2, units=128, activation=tf.nn.relu)
+			self.out=tf.layers.dense(inputs=self.a3, units=4, activation=tf.nn.relu)
 
+			self.pd, self.pi = self.pdtype.pdfromlatent(self.out, init_scale=0.01)
+			a0=self.pd.sample()
 
-		#calculate the loss function
-		self.loss=tf.reduce_sum(tf.multiply(tf.reduce_mean(tf.square(tf.subtract(self.out, tf.maximum(self.actions+100, 0)))),self.advantages))
+			#calculate the loss function
+			self.loss=tf.reduce_sum(tf.multiply(tf.reduce_mean(tf.square(tf.subtract(self.out, self.actions))),self.advantages))
 
-		optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
+			optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
 		self.train_op = optimizer.minimize(loss=self.loss,global_step=tf.train.get_global_step())
 
 	def train(self):
 		return self.loss, self.train_op
 	def predict(self):
+
 		return self.out
 
 
@@ -126,8 +135,8 @@ class Critic():
 		self.build_model()
 	def build_model(self):
 		#buld a 4 layer fc net for actor
-		c3=tf.layers.dense(inputs=self.Actor.a2, units=128, activation=tf.nn.relu)
-		self.c_out=tf.layers.dense(inputs=c3, units=1, activation=tf.nn.relu)
+		# c3=tf.layers.dense(inputs=self.Actor.a3, units=128, activation=tf.nn.relu)
+		self.c_out=tf.layers.dense(inputs=self.Actor.a3, units=1, activation=None)
 
 		# self.critic_loss=tf.reduce_mean(self.c_out, self.rewards)
 		self.critic_loss=tf.losses.mean_squared_error(self.rewards, self.c_out)
@@ -137,6 +146,130 @@ class Critic():
 		return self.critic_loss, self.train_op
 	def predict(self):
 		return self.c_out
+
+
+
+
+class Model(object):
+    """
+    another implementation seen in https://github.com/simoninithomas/Deep_reinforcement_learning_Course/blob/master/A2C%20with%20Sonic%20the%20Hedgehog/model.py
+    We use this object to :
+    __init__:
+    - Creates the step_model
+    - Creates the train_model
+    train():
+    - Make the training part (feedforward and retropropagation of gradients)
+    save/load():
+    - Save load the model
+    """
+    def __init__(self,
+                 policy,
+                ob_space,
+                action_space,
+                nenvs,
+                nsteps,
+                ent_coef,
+                vf_coef,
+                max_grad_norm):
+
+        sess = tf.get_default_session()
+
+        # Here we create the placeholders
+        actions_ = tf.placeholder(tf.int32, [None], name="actions_")
+        advantages_ = tf.placeholder(tf.float32, [None], name="advantages_")
+        rewards_ = tf.placeholder(tf.float32, [None], name="rewards_")
+        lr_ = tf.placeholder(tf.float32, name="learning_rate_")
+
+        # Here we create our two models:
+        # Step_model that is used for sampling
+        step_model = policy(sess, ob_space, action_space, nenvs, 1, reuse=False)
+
+        # Train model for training
+        train_model = policy(sess, ob_space, action_space, nenvs*nsteps, nsteps, reuse=True)
+
+        """
+        Calculate the loss
+        Total loss = Policy gradient loss - entropy * entropy coefficient + Value coefficient * value loss
+        """
+        # Policy loss
+        # Output -log(pi)
+        neglogpac = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=train_model.pi, labels=actions_)
+
+        # 1/n * sum A(si,ai) * -logpi(ai|si)
+        pg_loss = tf.reduce_mean(advantages_ * neglogpac)
+
+        # Value loss 1/2 SUM [R - V(s)]^2
+        vf_loss = tf.reduce_mean(mse(tf.squeeze(train_model.vf),rewards_))
+
+        # Entropy is used to improve exploration by limiting the premature convergence to suboptimal policy.
+        entropy = tf.reduce_mean(train_model.pd.entropy())
+
+
+        loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
+
+        # Update parameters using loss
+        # 1. Get the model parameters
+        params = find_trainable_variables("model")
+
+        # 2. Calculate the gradients
+        grads = tf.gradients(loss, params)
+        if max_grad_norm is not None:
+            # Clip the gradients (normalize)
+            grads, grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
+        grads = list(zip(grads, params))
+        # zip aggregate each gradient with parameters associated
+        # For instance zip(ABCD, xyza) => Ax, By, Cz, Da
+
+        # 3. Build our trainer
+        trainer = tf.train.RMSPropOptimizer(learning_rate=lr_, decay=0.99, epsilon=1e-5)
+
+        # 4. Backpropagation
+        _train = trainer.apply_gradients(grads)
+
+        def train(states_in, actions, returns, values, lr):
+            # Here we calculate advantage A(s,a) = R + yV(s') - V(s)
+            # Returns = R + yV(s')
+            advantages = returns - values
+
+            # We create the feed dictionary
+            td_map = {train_model.inputs_: states_in,
+                     actions_: actions,
+                     advantages_: advantages, # Use to calculate our policy loss
+                     rewards_: returns, # Use as a bootstrap for real value
+                     lr_: lr}
+
+            policy_loss, value_loss, policy_entropy, _= sess.run([pg_loss, vf_loss, entropy, _train], td_map)
+            
+            return policy_loss, value_loss, policy_entropy
+
+
+        def save(save_path):
+            """
+            Save the model
+            """
+            saver = tf.train.Saver()
+            saver.save(sess, save_path)
+
+        def load(load_path):
+            """
+            Load the model
+            """
+            saver = tf.train.Saver()
+            print('Loading ' + load_path)
+            saver.restore(sess, load_path)
+
+        self.train = train
+        self.train_model = train_model
+        self.step_model = step_model
+        self.step = step_model.step
+        self.value = step_model.value
+        self.initial_state = step_model.initial_state
+        self.save = save
+        self.load = load
+		tf.global_variables_initializer().run(session=sess)
+
+
+
 
 
 def discount(r, gamma=0.95):
@@ -359,13 +492,9 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 
 				if do_a2c:
 					#this
-					if e>1000:
-						print('do_a2c')
 					a=sess.run(actor.predict(), feed_dict={States: np.asarray(old_state).reshape(-1,4,6)}).squeeze()
 					a=a-100
 				else:
-					if e>1000:
-						print('controller')
 					err_x=[state[2]-state[4], state[0]-state[4]]
 					err_y=[state[3]-state[5], state[1]-state[5]]
 
@@ -439,7 +568,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 					actions2=np.asarray(actions2)[-min(1000, len(rewards2)):]
 					rewards2=np.asarray(rewards2)[-min(1000, len(rewards2)):]
 
-
+					print(actions2.shape)
 					# discount the rewards
 					discounted_r=discount(rewards2).reshape((-1,1))
 
