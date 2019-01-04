@@ -40,5 +40,5 @@ class Environment(object):
         self.state_buffer.append(x_t1)
         return s_t1, r_t, terminal, info
 
-    def render(self, pt=[]):
-        return self.env.render(pt=pt)
+    def render(self, pt=[], text=""):
+        return self.env.render(pt=pt, text=text)

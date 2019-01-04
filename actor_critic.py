@@ -10,6 +10,8 @@ from hindsight import hindsight
 # This function selects the probability distribution over actions
 # from baselines.common.distributions import make_pdtype
 from stable_baselines.common.distributions import make_proba_dist_type
+from gym import spaces
+
 
 import scipy.stats
 
@@ -38,10 +40,10 @@ class Actor():
 		self.actions=actions
 		self.advantages=advantages
 		self.lr=lr
-		self.pdtype = make_proba_dist_type(action_space)
+		self.pdtype = make_proba_dist_type(spaces.Discrete(4))
 		self.build_model()
 
-	def build_model(self):
+	def build_model(self, reuse=tf.AUTO_REUSE):
 		#buld a 4 layer fc net for actor
 		# X=tf.placeholder([-1,6,4])
 		states_in=tf.layers.flatten(self.states)
@@ -51,7 +53,9 @@ class Actor():
 			self.a3=tf.layers.dense(inputs=self.a2, units=128, activation=tf.nn.relu)
 			self.out=tf.layers.dense(inputs=self.a3, units=4, activation=tf.nn.relu)
 
-			self.pd, self.pi = self.pdtype.pdfromlatent(self.out, init_scale=0.01)
+			#
+			# self.pd, self.pi = self.pdtype.pdfromlatent(self.out, init_scale=0.01) # with baselines from openai
+			self.pd, self.pi, _ = self.pdtype.proba_distribution_from_latent(self.out, self.out, init_scale=0.01) # with stable_baselines see https://stable-baselines.readthedocs.io/en/master/common/distributions.html?highlight=vf%20latent%20vector
 			a0=self.pd.sample()
 
 			#calculate the loss function
@@ -124,8 +128,26 @@ class Network2():
 		return self.out
 
 
+class MagNet():
+	def __init__(self, Actor, sparse_select, magnitude, lr=1e-4):
+		self.sparse_select=sparse_select
+		self.magnitude=magnitude
+		self.lr=lr
+		self.Actor=Actor
+		self.build_model()
+	def build_model(self):
+		mask1=tf.layers.dense(inputs=self.sparse_select, units=16, activation=tf.nn.relu)
+		# self.m_out=tf.layers.dense(inputs=self.Actor.a3, units=1, activation=tf.nn.relu)
+		self.mag_out=tf.layers.dense(inputs=tf.concat([self.Actor.a3, mask1], 1), units=2, activation=tf.nn.relu)
 
-
+		# self.critic_loss=tf.reduce_mean(self.c_out, self.rewards)
+		self.magnitude_loss=tf.losses.mean_squared_error(self.magnitude, self.mag_out)
+		self.optimizer=tf.train.AdamOptimizer(learning_rate=self.lr)
+		self.train_op=self.optimizer.minimize(loss=self.magnitude_loss, global_step=tf.train.get_global_step())
+	def train(self):
+		return self.magnitude_loss, self.train_op
+	def predict(self):
+		return self.mag_out
 
 class Critic():
 	def __init__(self, discounted_rewards, Actor, lr=1e-4):
@@ -151,126 +173,113 @@ class Critic():
 
 
 class Model(object):
-    """
-    another implementation seen in https://github.com/simoninithomas/Deep_reinforcement_learning_Course/blob/master/A2C%20with%20Sonic%20the%20Hedgehog/model.py
-    We use this object to :
-    __init__:
-    - Creates the step_model
-    - Creates the train_model
-    train():
-    - Make the training part (feedforward and retropropagation of gradients)
-    save/load():
-    - Save load the model
-    """
-    def __init__(self,
-                 policy,
-                ob_space,
-                action_space,
-                nenvs,
-                nsteps,
-                ent_coef,
-                vf_coef,
-                max_grad_norm):
+	"""
+	another implementation seen in https://github.com/simoninithomas/Deep_reinforcement_learning_Course/blob/master/A2C%20with%20Sonic%20the%20Hedgehog/model.py
+	We use this object to :
+	__init__:
+	- Creates the step_model
+	- Creates the train_model
+	train():
+	- Make the training part (feedforward and retropropagation of gradients)
+	save/load():
+	- Save load the model
+	"""
+	def __init__(self,policy,ob_space,action_space,nenvs,nsteps,ent_coef,vf_coef,max_grad_norm):
 
-        sess = tf.get_default_session()
+		sess = tf.get_default_session()
 
-        # Here we create the placeholders
-        actions_ = tf.placeholder(tf.int32, [None], name="actions_")
-        advantages_ = tf.placeholder(tf.float32, [None], name="advantages_")
-        rewards_ = tf.placeholder(tf.float32, [None], name="rewards_")
-        lr_ = tf.placeholder(tf.float32, name="learning_rate_")
+		# Here we create the placeholders
+		actions_ = tf.placeholder(tf.int32, [None], name="actions_")
+		advantages_ = tf.placeholder(tf.float32, [None], name="advantages_")
+		rewards_ = tf.placeholder(tf.float32, [None], name="rewards_")
+		lr_ = tf.placeholder(tf.float32, name="learning_rate_")
 
-        # Here we create our two models:
-        # Step_model that is used for sampling
-        step_model = policy(sess, ob_space, action_space, nenvs, 1, reuse=False)
+		# Here we create our two models:
+		# Step_model that is used for sampling
+		step_model = policy(sess, ob_space, action_space, nenvs, 1, reuse=False)
 
-        # Train model for training
-        train_model = policy(sess, ob_space, action_space, nenvs*nsteps, nsteps, reuse=True)
+		# Train model for training
+		train_model = policy(sess, ob_space, action_space, nenvs*nsteps, nsteps, reuse=True)
 
-        """
-        Calculate the loss
-        Total loss = Policy gradient loss - entropy * entropy coefficient + Value coefficient * value loss
-        """
-        # Policy loss
-        # Output -log(pi)
-        neglogpac = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=train_model.pi, labels=actions_)
+		"""
+		Calculate the loss
+		Total loss = Policy gradient loss - entropy * entropy coefficient + Value coefficient * value loss
+		"""
+		# Policy loss
+		# Output -log(pi)
+		neglogpac = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=train_model.pi, labels=actions_)
 
-        # 1/n * sum A(si,ai) * -logpi(ai|si)
-        pg_loss = tf.reduce_mean(advantages_ * neglogpac)
+		# 1/n * sum A(si,ai) * -logpi(ai|si)
+		pg_loss = tf.reduce_mean(advantages_ * neglogpac)
 
-        # Value loss 1/2 SUM [R - V(s)]^2
-        vf_loss = tf.reduce_mean(mse(tf.squeeze(train_model.vf),rewards_))
+		# Value loss 1/2 SUM [R - V(s)]^2
+		vf_loss = tf.reduce_mean(mse(tf.squeeze(train_model.vf),rewards_))
 
-        # Entropy is used to improve exploration by limiting the premature convergence to suboptimal policy.
-        entropy = tf.reduce_mean(train_model.pd.entropy())
+		# Entropy is used to improve exploration by limiting the premature convergence to suboptimal policy.
+		entropy = tf.reduce_mean(train_model.pd.entropy())
 
 
-        loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
+		loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
 
-        # Update parameters using loss
-        # 1. Get the model parameters
-        params = find_trainable_variables("model")
+		# Update parameters using loss
+		# 1. Get the model parameters
+		params = find_trainable_variables("model")
 
-        # 2. Calculate the gradients
-        grads = tf.gradients(loss, params)
-        if max_grad_norm is not None:
-            # Clip the gradients (normalize)
-            grads, grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
-        grads = list(zip(grads, params))
-        # zip aggregate each gradient with parameters associated
-        # For instance zip(ABCD, xyza) => Ax, By, Cz, Da
+		# 2. Calculate the gradients
+		grads = tf.gradients(loss, params)
+		if max_grad_norm is not None:
+			# Clip the gradients (normalize)
+			grads, grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
+		grads = list(zip(grads, params))
+		# zip aggregate each gradient with parameters associated
+		# For instance zip(ABCD, xyza) => Ax, By, Cz, Da
 
-        # 3. Build our trainer
-        trainer = tf.train.RMSPropOptimizer(learning_rate=lr_, decay=0.99, epsilon=1e-5)
+		# 3. Build our trainer
+		trainer = tf.train.RMSPropOptimizer(learning_rate=lr_, decay=0.99, epsilon=1e-5)
 
-        # 4. Backpropagation
-        _train = trainer.apply_gradients(grads)
+		# 4. Backpropagation
+		_train = trainer.apply_gradients(grads)
 
-        def train(states_in, actions, returns, values, lr):
-            # Here we calculate advantage A(s,a) = R + yV(s') - V(s)
-            # Returns = R + yV(s')
-            advantages = returns - values
+		def train(states_in, actions, returns, values, lr):
+			# Here we calculate advantage A(s,a) = R + yV(s') - V(s)
+			# Returns = R + yV(s')
+			advantages = returns - values
 
-            # We create the feed dictionary
-            td_map = {train_model.inputs_: states_in,
-                     actions_: actions,
-                     advantages_: advantages, # Use to calculate our policy loss
-                     rewards_: returns, # Use as a bootstrap for real value
-                     lr_: lr}
+			# We create the feed dictionary
+			td_map = {train_model.inputs_: states_in,
+						actions_: actions,
+						advantages_: advantages, # Use to calculate our policy loss
+						rewards_: returns, # Use as a bootstrap for real value
+						lr_: lr}
 
-            policy_loss, value_loss, policy_entropy, _= sess.run([pg_loss, vf_loss, entropy, _train], td_map)
-            
-            return policy_loss, value_loss, policy_entropy
+			policy_loss, value_loss, policy_entropy, _= sess.run([pg_loss, vf_loss, entropy, _train], td_map)
 
+			return policy_loss, value_loss, policy_entropy
 
-        def save(save_path):
-            """
-            Save the model
-            """
-            saver = tf.train.Saver()
-            saver.save(sess, save_path)
+		def save(save_path):
+			"""
+			Save the model
+			"""
+			saver = tf.train.Saver()
+			saver.save(sess, save_path)
 
-        def load(load_path):
-            """
-            Load the model
-            """
-            saver = tf.train.Saver()
-            print('Loading ' + load_path)
-            saver.restore(sess, load_path)
+		def load(load_path):
+			"""
+			Load the model
+			"""
+			saver = tf.train.Saver()
+			print('Loading ' + load_path)
+			saver.restore(sess, load_path)
 
-        self.train = train
-        self.train_model = train_model
-        self.step_model = step_model
-        self.step = step_model.step
-        self.value = step_model.value
-        self.initial_state = step_model.initial_state
-        self.save = save
-        self.load = load
+		self.train = train
+		self.train_model = train_model
+		self.step_model = step_model
+		self.step = step_model.step
+		self.value = step_model.value
+		self.initial_state = step_model.initial_state
+		self.save = save
+		self.load = load
 		tf.global_variables_initializer().run(session=sess)
-
-
-
-
 
 def discount(r, gamma=0.95):
         """ Compute the gamma-discounted rewards over an episode
@@ -398,7 +407,8 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 	"""
 	# self.pretrain_random(env, args, summary_writer)
 	results = []
-	her=hindsight(batch_size=24)
+	hindsight_batch=24
+	her=hindsight(batch_size=hindsight_batch)
 
 	#state action placeholders
 	# States=tf.placeholder(tf.float32, shape=[None,2], name='States')
@@ -406,7 +416,12 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 	# Rewards=tf.placeholder(tf.float32, shape=[None,1], name='Rewards')
 	# Advantages=tf.placeholder(tf.float32, shape=[None,1], name='Advantages')
 	other=tf.placeholder(tf.float32, shape=[None,2], name='other')
-	scale_factor=tf.placeholder(tf.float32, shape=[], name='other')
+	scale_factor=tf.placeholder(tf.float32, shape=[], name='scale_factor')
+
+	sparse_select=tf.placeholder(tf.float32, shape=[None, 4], name='sparse_select')
+	magnitude=tf.placeholder(tf.float32, shape=[None, 2], name='magnitude')
+
+	magnitude_network=MagNet(actor, sparse_select, magnitude, lr=1e-4)
 
 
 	#we need three networks:
@@ -471,6 +486,8 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 			num_steps=0
 			cumul_reward=0
 			do_a2c=np.random.randint(2, size=1)
+			if len(her.objects)<hindsight_batch:
+				do_a2c=0
 			# while not done:
 			while True:
 				state_orig=old_state[-1]
@@ -487,13 +504,17 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 				# state[3]=state_estimate[1]+bias_y
 
 				if (e%100==0)|(e>5000):
-					env.render(pt=[[state[2], state[3]]])
+					if do_a2c:
+						env.render(pt=[[state[2], state[3]]], text="a2c {}".format(num_steps))
+					else:
+						env.render(pt=[[state[2], state[3]]], text="ctrl {}".format(num_steps))
 				# env.render(pt=[[state[2], state[3]]])
 
 				if do_a2c:
-					#this
+					env.render(pt=[[state[2], state[3]]], text="a2c {}".format(e))
 					a=sess.run(actor.predict(), feed_dict={States: np.asarray(old_state).reshape(-1,4,6)}).squeeze()
-					a=a-100
+					mag_pred=sess.run(magnitude_network.predict(), feed_dict={States: np.asarray(old_state).reshape(-1,4,6), sparse_select: a.reshape(-1,4)}).squeeze()
+					a=np.concatenate((a, mag_pred), axis=0)
 				else:
 					err_x=[state[2]-state[4], state[0]-state[4]]
 					err_y=[state[3]-state[5], state[1]-state[5]]
@@ -519,6 +540,19 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 					a=[Fx[0]*blend_x+Fx[1]*(1-blend_x), Fy[0]*blend_y+Fy[1]*(1-blend_y)]
 					# print(a)
 					a=[a[0]+np.random.normal(0,abs(err_x[0])*0.5+0.1), a[1]+np.random.normal(0,abs(err_y[0])*0.5+0.1)]
+
+					#reshape a to an appropriate format
+					#a=[pos_x, neg_x, pos_y, neg_y]
+					new_a=np.zeros((4)).reshape(-1)
+					# new_a[[max(0, np.sign(a[0])), max(0, np.sign(a[1]))]]=[1,1]
+					# if abs(a[0])>0.5:
+					new_a[int(1-max(0, np.sign(a[0])))]=1
+					# if abs(a[1])>0.5:
+					new_a[int(1-max(0, np.sign(a[1]))+2)]=1
+					# print(np.sign(a[0]), np.sign(a[1]))
+					# print(new_a)
+					mag_controller=np.abs(a)
+					a=np.concatenate((new_a, mag_controller), axis=0)
 
 
 				# Retrieve new state, reward, and whether the state is terminal
@@ -567,8 +601,10 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 					states2=np.asarray(states2)[-min(1000, len(rewards2)):]
 					actions2=np.asarray(actions2)[-min(1000, len(rewards2)):]
 					rewards2=np.asarray(rewards2)[-min(1000, len(rewards2)):]
+					mags=actions2[:, -2:]
+					actions2=actions2[:,:4]
 
-					print(actions2.shape)
+					# print(actions2.shape)
 					# discount the rewards
 					discounted_r=discount(rewards2).reshape((-1,1))
 
@@ -586,7 +622,6 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 					# print(actions2.shape)
 					# print(len(advantages))
 
-
 					# run the training operations
 					actor_loss,_=sess.run([actor.loss, actor.train_op], feed_dict={States:states2, Actions:actions2, Advantages:advantages})
 					# print(actor_loss)
@@ -595,7 +630,7 @@ def train_model2(env, actor, critic, States, Actions, Rewards, Advantages, k=100
 			# _=sess.run(approx_net.train_op, feed_dict={States:np.asarray(state)[2:4].reshape((-1,2)), other:np.asarray(old_state)[-1, 0:2].reshape((-1,2)), scale_factor:np.asarray(0.001+loss)})
 			# print(num_steps)
 			# Display score
-			
+
 
 	with open("output.csv", "w") as f:
 	    writer = csv.writer(f)
@@ -612,7 +647,7 @@ def main(training=True):
 
 	#state action placeholders
 	States=tf.placeholder(tf.float32, shape=[None,4,6], name='States')
-	Actions=tf.placeholder(tf.float32, shape=[None,2], name='Actions')
+	Actions=tf.placeholder(tf.float32, shape=[None,4], name='Actions')
 	Rewards=tf.placeholder(tf.float32, shape=[None,1], name='Rewards')
 	Advantages=tf.placeholder(tf.float32, shape=[None,1], name='Advantages')
 

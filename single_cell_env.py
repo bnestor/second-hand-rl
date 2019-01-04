@@ -269,7 +269,7 @@ class opticalTweezers():
         self.reward=0
         return np.asarray([self.p.x, self.p.y, user_x, user_y, self.ix, self.iy])
 
-    def render(self, pt=[]):
+    def render(self, pt=[], text=""):
         ix, iy=obscurity(self.ix,self.iy) #
 
         x_min=0
@@ -284,7 +284,9 @@ class opticalTweezers():
         weights=(weights*255).astype(np.uint8)
         # weights=((weights-np.amin(weights))/(np.amax(weights/np.amin(weights)))).astype(np.uint8)
         self.img=cv2.applyColorMap(weights, cv2.COLORMAP_OCEAN) # try spring, autumn, bone, summer, jet, rainbow
-
+        if len(text)>0:
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            self.img=cv2.putText(self.img,text,(10,480), font, 1,(255,255,255),1,cv2.LINE_AA)
         self.img=self.p.plot_point(self.img)
         self.img=cv2.circle(self.img,(int(self.user_x),int(self.user_y)),10,(0,0,255),1)
         if len(pt)>0:
@@ -307,12 +309,19 @@ class opticalTweezers():
     def step(self, action, drawing=True, dt=0.1):
         if len(action)==2:
             dix, diy=action
-        else:
-            dix,diy,yes_x, yes_y=action
-            dix=-1 if dix<0.5 else 1
-            diy=-1 if diy<0.5 else 1
-            dix=0 if yes_x<0.5 else dix
-            diy=0 if yes_y<0.5 else diy
+        elif len(action)==4:
+            pos_x, neg_x, pos_y, neg_y=action
+            dix=pos_x-neg_x
+            diy=pos_y-neg_y
+        elif len(action)==6:
+            pos_x, neg_x, pos_y, neg_y, mag_x, mag_y=action
+            dix=(pos_x-neg_x)*mag_x
+            diy=(pos_y-neg_y)*mag_y
+            # dix,diy,yes_x, yes_y=action
+            # dix=-1 if dix<0.5 else 1
+            # diy=-1 if diy<0.5 else 1
+            # dix=0 if yes_x<0.5 else dix
+            # diy=0 if yes_y<0.5 else diy
 
 
 
