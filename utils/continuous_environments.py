@@ -40,5 +40,9 @@ class Environment(object):
         self.state_buffer.append(x_t1)
         return s_t1, r_t, terminal, info
 
-    def render(self, pt=[], text=""):
-        return self.env.render(pt=pt, text=text)
+    def render(self, pt=[], text="", episode=None):
+        return self.env.render(pt=pt, text=text, episode=episode)
+    def set_user(self, user_x=0, user_y=0):
+        self.env.set_user(user_x=user_x, user_y=user_y)
+    def get_user_xy(self):
+        return self.env.user_x, self.env.user_y

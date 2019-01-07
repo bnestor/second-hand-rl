@@ -54,21 +54,41 @@ class hindsight():
                 if np.random.rand()>0.5:
                     # select a random index
                     ind=np.random.randint(10, len(rewards)-1)
+                    ind_for_pt=np.random.randint(5, ind-1)
                     states=states[:ind]
                     actions=actions[:ind]
                     rewards=rewards[:ind]
                     #set the end point as a reward
                     rewards[-1]=1
                     #set the end state as the correct state throughout the network.
+                    # np.asarray([self.p.x, self.p.y, user_x, user_y, self.ix, self.iy])
+
                     new_states=[]
-                    for state in states:
+                    for j, state in enumerate(states):
+                        if j<=ind_for_pt:
+                            state[:, 0:1]=states[ind_for_pt][:, 4:5]
+                        else:
+                            state[:, 0:1]=state[:, 4:5]+np.random.normal(0, 3,1)
                         if len(state.shape)==3:
                             state[:,:,2:3]=states[-1][-1,-1,2:3]
                         if len(state.shape)==2:
                             state[:,2:3]=states[-1][-1,2:3]
                         if len(state.shape)==1:
                             state[2:3]=states[-1][2:3]
+                        if np.any(np.any(np.isnan(state))):
+                            print(state)
                         new_states.append(state)
+
+
+                    # new_states=[]
+                    # for state in states:
+                    #     if len(state.shape)==3:
+                    #         state[:,:,2:3]=states[-1][-1,-1,2:3]
+                    #     if len(state.shape)==2:
+                    #         state[:,2:3]=states[-1][-1,2:3]
+                    #     if len(state.shape)==1:
+                    #         state[2:3]=states[-1][2:3]
+                    #     new_states.append(state)
                     samples[i]=(new_states, actions, rewards, True)
 
 

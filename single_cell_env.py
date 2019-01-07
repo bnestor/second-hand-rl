@@ -118,6 +118,8 @@ class point():
         # print(self.x,self.y)
         img=cv2.circle(img,(int(self.x),int(self.y)),10,(255,0,255),-1)
         self.history.append((int(self.x),int(self.y)))
+        if len(self.history)>1500:
+            self.history=self.history[-1500:]
         for pt in self.history:
             img=cv2.circle(img,pt,1,(255,0,255),-1)
         # print(self.x)
@@ -246,8 +248,29 @@ class opticalTweezers():
 
         self.action_log=[]
 
+        self.user_x=0
+        self.user_y=0
+        cv2.namedWindow('rendered')
+        cv2.setMouseCallback('rendered',self.update_user)
+        self.episode=0
+        self.out=None
+
         self.action_space=[-1, -1, -1,-1]
         self.observation_space=[self.p.x, self.p.y, -1,-1,-1,-1]
+
+    def update_user(self, event, x,y,flags, params):
+        """
+        for internal updates
+        """
+        if event ==cv2.EVENT_MOUSEMOVE:
+            self.user_x=x
+            self.user_y=y
+    def set_user(self,user_x=0, user_y=0):
+        """
+        for external updates
+        """
+        self.user_x=user_x
+        self.user_y=user_y
 
 
     def reset(self, user_x=None, user_y=None):
@@ -269,7 +292,7 @@ class opticalTweezers():
         self.reward=0
         return np.asarray([self.p.x, self.p.y, user_x, user_y, self.ix, self.iy])
 
-    def render(self, pt=[], text=""):
+    def render(self, pt=[], text="", episode=None):
         ix, iy=obscurity(self.ix,self.iy) #
 
         x_min=0
@@ -295,6 +318,31 @@ class opticalTweezers():
                 self.img=cv2.circle(self.img,(int(x),int(y)),10,(0,255,0),1)
         cv2.imshow('rendered', self.img)
         cv2.waitKey(2)
+
+        try:
+            int(episode)
+        except:
+            return
+        self.save_frame(text, episode)
+
+
+    def save_frame(self, text, episode):
+        if episode!=self.episode:
+            #new video object
+            if self.out==None:
+                pass
+            else:
+                self.out.release()
+                self.out=None
+            self.episode=episode
+
+        if self.out==None:
+            size=self.img.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+            fname='{}_episode-{}.avi'.format(text.split(" ")[0], str(episode).zfill(6))
+            self.out = cv2.VideoWriter(fname,fourcc, 60.0, (size[1], size[0]))
+        self.out.write(self.img)
+
 
     def _reward(self, action):
         dix,diy=action
@@ -374,6 +422,12 @@ class opticalTweezers():
             self.diy=sol_y[-1,1]
             self.iy=sol_y[-1,0]
 
+            # if it was only 4 values, consider discrete movement
+            if len(action)==4:
+                pos_x, neg_x, pos_y, neg_y=action
+                self.ix=self.ix+pos_x-neg_x
+                self.iy=self.iy+pos_y-neg_y
+
             #check to see if dynamics are violated
             # if (self.ix<0):
             #     self.dix=0
@@ -406,14 +460,14 @@ class opticalTweezers():
         self.p.update(dt, Fx=-F_applied*np.cos(theta)*0.01, Fy=-F_applied*np.sin(theta)*0.01)
 
 
-        #other features to return
+        # #other features to return
         done=False
-        if (self.p.x>self.img.shape[0])|(self.p.x<0):
-            done=True
-            # self.reward-=1
-        if (self.p.y>self.img.shape[1])|(self.p.y<0):
-            done=True
-            # self.reward-=1
+        # if (self.p.x>self.img.shape[0])|(self.p.x<0):
+        #     done=True
+        #     # self.reward-=1
+        # if (self.p.y>self.img.shape[1])|(self.p.y<0):
+        #     done=True
+        #     # self.reward-=1
         # if (self.ix>self.img.shape[0]+10)|(self.ix<-10):
         #     done=True
             # self.reward-=1
